@@ -6,41 +6,36 @@ from datetime import datetime
 
 import aiohttp
 import discord
-import gspread
 from discord.ext import commands
 from dotenv import load_dotenv
-from google.oauth2.service_account import Credentials
 
 load_dotenv()
 
-TOKEN           = os.getenv("DISCORD_TOKEN")
-CANAL_PAINEL_ID = int(os.getenv("CANAL_PAINEL_ID", "1504517445954703554"))
-CANAL_POSTS_ID  = int(os.getenv("CANAL_POSTS_ID",  "1504491774150705152"))
-IMGBB_API_KEY   = os.getenv("IMGBB_API_KEY", "")
-GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "")
+TOKEN            = os.getenv("DISCORD_TOKEN")
+CANAL_PAINEL_ID  = int(os.getenv("CANAL_PAINEL_ID", "1504517445954703554"))
+CANAL_POSTS_ID   = int(os.getenv("CANAL_POSTS_ID",  "1504491774150705152"))
+IMGBB_API_KEY    = os.getenv("IMGBB_API_KEY", "")
+APPS_SCRIPT_URL  = os.getenv("APPS_SCRIPT_URL", "")
 
-DATA_FILE   = "data.json"
-PANEL_FILE  = "panel_id.json"
-CREDS_FILE  = "credentials.json"
+DATA_FILE  = "data.json"
+PANEL_FILE = "panel_id.json"
 
-COMBOS     = ["Aurora", "Delfos", "Estradeiro", "Estradeiro Verde", "Sunset", "Midnight"]
-PELUCIAS   = ["Aegis", "Raposo"]
+COMBOS      = ["Aurora", "Delfos", "Estradeiro", "Estradeiro Verde", "Sunset", "Midnight"]
+PELUCIAS    = ["Aegis", "Raposo"]
 TODOS_ITENS = COMBOS + PELUCIAS
 
 DRACMAS = {**{c: 10 for c in COMBOS}, **{p: 250 for p in PELUCIAS}}
 
 EMOJI = {
-    "Aurora":          "🌅",
-    "Delfos":          "🌊",
-    "Estradeiro":      "🛣️",
-    "Estradeiro Verde":"🌿",
-    "Sunset":          "🌇",
-    "Midnight":        "🌙",
-    "Aegis":           "🛡️",
-    "Raposo":          "🦊",
+    "Aurora":           "🌅",
+    "Delfos":           "🌊",
+    "Estradeiro":       "🛣️",
+    "Estradeiro Verde": "🌿",
+    "Sunset":           "🌇",
+    "Midnight":         "🌙",
+    "Aegis":            "🛡️",
+    "Raposo":           "🦊",
 }
-
-SHEET_HEADERS = ["Data/Hora", "Tipo", "Usuário", "Item", "Quantidade", "Dracmas", "Foto", "Estoque Restante"]
 
 # user_id -> sale info (waiting for chest photo)
 pending_sales: dict[int, dict] = {}
@@ -51,7 +46,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
-# ── Local data helpers ────────────────────────────────────────────────────────
+# ── Local data ────────────────────────────────────────────────────────────────
 
 def default_data() -> dict:
     return {
@@ -68,7 +63,7 @@ def load_data() -> dict:
         return data
     with open(DATA_FILE, "r", encoding="utf-8") as f:
         data = json.load(f)
-    if "estoque_atual" in data:  # migrate old flat structure
+    if "estoque_atual" in data:  # migrate old structure
         new = default_data()
         new["total_dracmas_depositados"] = data.get("total_dracmas_depositados", 0)
         new["historico"] = data.get("historico", [])
@@ -96,46 +91,25 @@ def save_panel_id(message_id: int) -> None:
         json.dump({"message_id": message_id}, f)
 
 
-# ── Google Sheets ─────────────────────────────────────────────────────────────
+# ── Apps Script ───────────────────────────────────────────────────────────────
 
-def _open_sheet() -> gspread.Worksheet:
-    creds = Credentials.from_service_account_file(
-        CREDS_FILE,
-        scopes=["https://www.googleapis.com/auth/spreadsheets"],
-    )
-    return gspread.authorize(creds).open_by_key(GOOGLE_SHEET_ID).sheet1
-
-
-async def sheets_ensure_headers() -> None:
-    if not GOOGLE_SHEET_ID or not os.path.exists(CREDS_FILE):
-        print("⚠️  Google Sheets não configurado (credentials.json ou GOOGLE_SHEET_ID ausente).")
+async def sheets_append(payload: dict) -> None:
+    """POST a row to the Google Apps Script Web App."""
+    if not APPS_SCRIPT_URL:
         return
     try:
-        def _check():
-            sheet = _open_sheet()
-            if not sheet.row_values(1):
-                sheet.append_row(SHEET_HEADERS)
-        await asyncio.to_thread(_check)
-        print("✅ Google Sheets conectado.")
+        async with aiohttp.ClientSession() as session:
+            async with session.post(APPS_SCRIPT_URL, json=payload, allow_redirects=True) as r:
+                if r.status not in (200, 302):
+                    print(f"⚠️  Apps Script: status {r.status}")
     except Exception as e:
-        print(f"⚠️  Google Sheets: {e}")
-
-
-async def sheets_append(row: list) -> None:
-    if not GOOGLE_SHEET_ID or not os.path.exists(CREDS_FILE):
-        return
-    try:
-        await asyncio.to_thread(
-            lambda: _open_sheet().append_row(row, value_input_option="USER_ENTERED")
-        )
-    except Exception as e:
-        print(f"⚠️  Google Sheets append: {e}")
+        print(f"⚠️  Apps Script: {e}")
 
 
 # ── imgbb ─────────────────────────────────────────────────────────────────────
 
 async def imgbb_upload(discord_url: str) -> str:
-    """Upload image to imgbb and return a permanent URL. Falls back to Discord URL on error."""
+    """Upload image to imgbb, return permanent URL. Falls back to Discord URL on error."""
     if not IMGBB_API_KEY:
         return discord_url
     try:
@@ -150,7 +124,7 @@ async def imgbb_upload(discord_url: str) -> str:
                 result = await r.json()
         return result["data"]["url"]
     except Exception as e:
-        print(f"⚠️  imgbb upload: {e}")
+        print(f"⚠️  imgbb: {e}")
         return discord_url
 
 
@@ -196,30 +170,30 @@ class AdicionarEstoqueModal(discord.ui.Modal):
         save_data(data)
 
         tipo = "Pelúcia" if self.item in PELUCIAS else "Combo"
-        now = datetime.now()
+        now  = datetime.now()
 
         embed = discord.Embed(title="📦 Estoque Atualizado", color=discord.Color.blue())
-        embed.add_field(name="Item", value=f"{EMOJI[self.item]} {self.item} ({tipo})", inline=False)
-        embed.add_field(name="Adicionados", value=f"+{qtd}", inline=True)
-        embed.add_field(name="Estoque Atual", value=str(data["estoque"][self.item]), inline=True)
+        embed.add_field(name="Item",         value=f"{EMOJI[self.item]} {self.item} ({tipo})", inline=False)
+        embed.add_field(name="Adicionados",  value=f"+{qtd}",                                  inline=True)
+        embed.add_field(name="Estoque Atual",value=str(data["estoque"][self.item]),             inline=True)
         embed.set_footer(text=f"{interaction.user.display_name} • {now.strftime('%d/%m/%Y %H:%M')}")
 
         await interaction.response.send_message("✅ Estoque atualizado!", ephemeral=True)
 
         canal_posts = bot.get_channel(CANAL_POSTS_ID) or await bot.fetch_channel(CANAL_POSTS_ID)
-        sheet_row = [
-            now.strftime("%d/%m/%Y %H:%M"),
-            "Estoque",
-            interaction.user.display_name,
-            self.item,
-            qtd,
-            "",
-            "",
-            data["estoque"][self.item],
-        ]
+        payload = {
+            "timestamp":       now.strftime("%d/%m/%Y %H:%M"),
+            "tipo":            "Estoque",
+            "usuario":         interaction.user.display_name,
+            "item":            self.item,
+            "quantidade":      qtd,
+            "dracmas":         "",
+            "foto":            "",
+            "estoque_restante": data["estoque"][self.item],
+        }
         await asyncio.gather(
             canal_posts.send(embed=embed),
-            sheets_append(sheet_row),
+            sheets_append(payload),
         )
 
 
@@ -255,12 +229,12 @@ class RegistrarVendaModal(discord.ui.Modal):
 
         dracmas = DRACMAS[self.item] * qtd
         pending_sales[interaction.user.id] = {
-            "item": self.item,
-            "quantidade": qtd,
-            "dracmas": dracmas,
-            "channel_id": CANAL_PAINEL_ID,
+            "item":         self.item,
+            "quantidade":   qtd,
+            "dracmas":      dracmas,
+            "channel_id":   CANAL_PAINEL_ID,
             "display_name": interaction.user.display_name,
-            "mention": interaction.user.mention,
+            "mention":      interaction.user.mention,
         }
 
         await interaction.response.send_message(
@@ -296,7 +270,7 @@ class PainelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Adicionar Estoque", emoji="📦", style=discord.ButtonStyle.primary, custom_id="bar:add_stock")
+    @discord.ui.button(label="Adicionar Estoque", emoji="📦", style=discord.ButtonStyle.primary,   custom_id="bar:add_stock")
     async def add_stock(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message(
             "📦 **Selecione o item para adicionar ao estoque:**",
@@ -304,7 +278,7 @@ class PainelView(discord.ui.View):
             ephemeral=True,
         )
 
-    @discord.ui.button(label="Registrar Venda", emoji="💰", style=discord.ButtonStyle.success, custom_id="bar:register_sale")
+    @discord.ui.button(label="Registrar Venda",   emoji="💰", style=discord.ButtonStyle.success,   custom_id="bar:register_sale")
     async def register_sale(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message(
             "💰 **Selecione o item vendido:**",
@@ -312,10 +286,10 @@ class PainelView(discord.ui.View):
             ephemeral=True,
         )
 
-    @discord.ui.button(label="Ver Resumo", emoji="📊", style=discord.ButtonStyle.secondary, custom_id="bar:summary")
+    @discord.ui.button(label="Ver Resumo",        emoji="📊", style=discord.ButtonStyle.secondary, custom_id="bar:summary")
     async def summary(self, interaction: discord.Interaction, button: discord.ui.Button):
-        data = load_data()
-        estoque = data["estoque"]
+        data     = load_data()
+        estoque  = data["estoque"]
         historico = data["historico"]
 
         total_combos   = sum(r["quantidade"] for r in historico if r.get("item") in COMBOS)
@@ -325,11 +299,11 @@ class PainelView(discord.ui.View):
         pelucias_lines = "\n".join(f"{EMOJI[p]} **{p}**: {estoque.get(p, 0)}" for p in PELUCIAS)
 
         embed = discord.Embed(title="📊 Resumo do Bar", color=discord.Color.gold())
-        embed.add_field(name="🍹 Estoque — Combos",   value=combos_lines,   inline=True)
-        embed.add_field(name="🧸 Estoque — Pelúcias", value=pelucias_lines, inline=True)
+        embed.add_field(name="🍹 Estoque — Combos",    value=combos_lines,   inline=True)
+        embed.add_field(name="🧸 Estoque — Pelúcias",  value=pelucias_lines, inline=True)
         embed.add_field(name="​", value="​", inline=False)
-        embed.add_field(name="💰 Combos Vendidos",    value=str(total_combos),   inline=True)
-        embed.add_field(name="🧸 Pelúcias Vendidas",  value=str(total_pelucias), inline=True)
+        embed.add_field(name="💰 Combos Vendidos",     value=str(total_combos),                        inline=True)
+        embed.add_field(name="🧸 Pelúcias Vendidas",   value=str(total_pelucias),                      inline=True)
         embed.add_field(name="🪙 Dracmas Depositados", value=f"{data['total_dracmas_depositados']} Ð", inline=True)
         embed.set_footer(text=f"Atualizado em {datetime.now().strftime('%d/%m/%Y %H:%M')}")
 
@@ -365,7 +339,6 @@ async def on_ready():
     print(f"🔍 Servidores: {[g.name for g in bot.guilds]}")
 
     bot.add_view(PainelView())
-    await sheets_ensure_headers()
 
     try:
         canal = await bot.fetch_channel(CANAL_PAINEL_ID)
@@ -433,7 +406,7 @@ async def on_message(message: discord.Message):
     dracmas   = sale["dracmas"]
     now       = datetime.now()
 
-    # Upload to imgbb and delete the Discord message concurrently
+    # Upload to imgbb and delete photo concurrently
     async def _delete():
         try:
             await message.delete()
@@ -459,28 +432,28 @@ async def on_message(message: discord.Message):
 
     tipo = "Pelúcia" if item in PELUCIAS else "Combo"
     embed = discord.Embed(title="✅ Venda Registrada!", color=discord.Color.green())
-    embed.add_field(name="👤 Vendedor",             value=sale["mention"],                   inline=True)
-    embed.add_field(name="🛍️ Item",                value=f"{EMOJI[item]} {item} ({tipo})", inline=True)
-    embed.add_field(name="📦 Quantidade",           value=str(quantidade),                  inline=True)
-    embed.add_field(name="🪙 Dracmas Depositados",  value=f"{dracmas} Ð",                   inline=True)
-    embed.add_field(name="📦 Estoque Restante",     value=str(data["estoque"][item]),        inline=True)
+    embed.add_field(name="👤 Vendedor",            value=sale["mention"],                    inline=True)
+    embed.add_field(name="🛍️ Item",               value=f"{EMOJI[item]} {item} ({tipo})",  inline=True)
+    embed.add_field(name="📦 Quantidade",          value=str(quantidade),                   inline=True)
+    embed.add_field(name="🪙 Dracmas Depositados", value=f"{dracmas} Ð",                    inline=True)
+    embed.add_field(name="📦 Estoque Restante",    value=str(data["estoque"][item]),         inline=True)
     embed.set_image(url=imgbb_url)
     embed.set_footer(text=now.strftime("%d/%m/%Y %H:%M"))
 
     canal_posts = bot.get_channel(CANAL_POSTS_ID) or await bot.fetch_channel(CANAL_POSTS_ID)
-    sheet_row = [
-        now.strftime("%d/%m/%Y %H:%M"),
-        "Venda",
-        sale["display_name"],
-        item,
-        quantidade,
-        dracmas,
-        imgbb_url,
-        data["estoque"][item],
-    ]
+    payload = {
+        "timestamp":        now.strftime("%d/%m/%Y %H:%M"),
+        "tipo":             "Venda",
+        "usuario":          sale["display_name"],
+        "item":             item,
+        "quantidade":       quantidade,
+        "dracmas":          dracmas,
+        "foto":             imgbb_url,
+        "estoque_restante": data["estoque"][item],
+    }
     await asyncio.gather(
         canal_posts.send(embed=embed),
-        sheets_append(sheet_row),
+        sheets_append(payload),
     )
 
 
