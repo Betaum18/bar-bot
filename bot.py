@@ -268,18 +268,50 @@ class RegistrarVendaModal(discord.ui.Modal):
             return
 
         dracmas = DRACMAS[self.item] * qtd
+
+        # Create a temporary thread so the photo never touches the main channel
+        try:
+            thread = await interaction.channel.create_thread(
+                name=f"📸 venda · {interaction.user.display_name}",
+                type=discord.ChannelType.private_thread,
+                auto_archive_duration=60,
+                invitable=False,
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            # Fallback: public thread (servers without private thread support)
+            try:
+                thread = await interaction.channel.create_thread(
+                    name=f"📸 venda · {interaction.user.display_name}",
+                    type=discord.ChannelType.public_thread,
+                    auto_archive_duration=60,
+                )
+            except Exception as ex:
+                print(f"❌ Não foi possível criar thread: {ex}")
+                await interaction.response.send_message(
+                    "❌ Não consegui criar uma thread. Verifique as permissões do bot.", ephemeral=True
+                )
+                return
+
+        await thread.add_user(interaction.user)
+        await thread.send(
+            f"{interaction.user.mention} 📸 **Cole a foto do baú aqui** (Ctrl+V).\n"
+            f"> {EMOJI[self.item]} **{self.item}**: {qtd} unid. • **{dracmas} Ð** a depositar\n"
+            f"-# Esta thread será apagada automaticamente após o registro."
+        )
+
         pending_sales[interaction.user.id] = {
             "item":         self.item,
             "quantidade":   qtd,
             "dracmas":      dracmas,
-            "channel_id":   CANAL_PAINEL_ID,
+            "channel_id":   thread.id,
+            "thread_id":    thread.id,
             "display_name": interaction.user.display_name,
             "mention":      interaction.user.mention,
         }
 
         await interaction.response.send_message(
-            f"📸 **Envie a foto do baú agora** neste canal (Ctrl+V para colar a imagem).\n"
-            f"> {EMOJI[self.item]} **{self.item}**: {qtd} unid. • **{dracmas} Ð** a depositar",
+            f"📸 **Thread criada!** Vá até ela e cole a foto do baú.\n"
+            f"> {EMOJI[self.item]} **{self.item}**: {qtd} unid. • **{dracmas} Ð**",
             ephemeral=True,
         )
 
@@ -447,17 +479,19 @@ async def on_message(message: discord.Message):
     dracmas   = sale["dracmas"]
     now       = datetime.now()
 
-    # Upload to imgbb and delete photo concurrently
+    # Upload to imgbb and delete the thread concurrently
     async def _delete():
         try:
-            await message.delete()
-            print(f"🗑️  Foto de {message.author.display_name} apagada.")
+            if isinstance(message.channel, discord.Thread):
+                await message.channel.delete()
+            else:
+                await message.delete()
         except discord.Forbidden:
-            print(f"❌ Sem permissão para apagar mensagem no canal {message.channel.name}. Adicione a permissão 'Gerenciar Mensagens' ao bot.")
+            print(f"❌ Sem permissão para apagar thread/mensagem. Conceda 'Gerenciar Threads' ao bot.")
         except discord.NotFound:
-            pass  # already deleted
+            pass
         except Exception as ex:
-            print(f"❌ Erro ao apagar foto: {ex}")
+            print(f"❌ Erro ao apagar thread: {ex}")
 
     imgbb_url, _ = await asyncio.gather(imgbb_upload(image.url), _delete())
 
