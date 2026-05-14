@@ -410,8 +410,13 @@ async def on_message(message: discord.Message):
     async def _delete():
         try:
             await message.delete()
+            print(f"🗑️  Foto de {message.author.display_name} apagada.")
         except discord.Forbidden:
-            pass
+            print(f"❌ Sem permissão para apagar mensagem no canal {message.channel.name}. Adicione a permissão 'Gerenciar Mensagens' ao bot.")
+        except discord.NotFound:
+            pass  # already deleted
+        except Exception as ex:
+            print(f"❌ Erro ao apagar foto: {ex}")
 
     imgbb_url, _ = await asyncio.gather(imgbb_upload(image.url), _delete())
 
