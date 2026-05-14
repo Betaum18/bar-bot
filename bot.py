@@ -106,6 +106,46 @@ async def sheets_append(payload: dict) -> None:
         print(f"⚠️  Apps Script: {e}")
 
 
+async def sync_stock_from_sheets() -> None:
+    """On startup, rebuild stock state from the last known estoque_restante per item."""
+    if not APPS_SCRIPT_URL:
+        return
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(APPS_SCRIPT_URL, allow_redirects=True) as r:
+                if r.status != 200:
+                    print(f"⚠️  Sheets sync: status {r.status}")
+                    return
+                rows = await r.json(content_type=None)
+
+        if not rows:
+            print("ℹ️  Planilha vazia, mantendo estoque local.")
+            return
+
+        data = load_data()
+        total_dracmas = 0
+        # The last row mentioning each item carries the most recent estoque_restante
+        for row in rows:
+            item = row.get("item")
+            if item in TODOS_ITENS:
+                try:
+                    data["estoque"][item] = int(row.get("estoque_restante") or 0)
+                except (ValueError, TypeError):
+                    pass
+            if row.get("tipo") == "Venda":
+                try:
+                    total_dracmas += int(row.get("dracmas") or 0)
+                except (ValueError, TypeError):
+                    pass
+
+        data["total_dracmas_depositados"] = total_dracmas
+        save_data(data)
+        print(f"✅ Estoque sincronizado da planilha: { {k: v for k, v in data['estoque'].items()} }")
+
+    except Exception as e:
+        print(f"⚠️  Sheets sync: {e}")
+
+
 # ── imgbb ─────────────────────────────────────────────────────────────────────
 
 async def imgbb_upload(discord_url: str) -> str:
@@ -339,6 +379,7 @@ async def on_ready():
     print(f"🔍 Servidores: {[g.name for g in bot.guilds]}")
 
     bot.add_view(PainelView())
+    await sync_stock_from_sheets()
 
     try:
         canal = await bot.fetch_channel(CANAL_PAINEL_ID)
