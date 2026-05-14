@@ -401,8 +401,11 @@ async def on_message(message: discord.Message):
     embed.set_image(url=image.url)
     embed.set_footer(text=now.strftime("%d/%m/%Y %H:%M"))
 
-    # Acknowledge in the panel channel and post the record in the posts channel
-    await message.reply("✅ Venda registrada!", delete_after=5)
+    # Delete the photo from the panel channel and post the record in the posts channel
+    try:
+        await message.delete()
+    except discord.Forbidden:
+        pass
     canal_posts = bot.get_channel(CANAL_POSTS_ID) or await bot.fetch_channel(CANAL_POSTS_ID)
     await canal_posts.send(embed=embed)
 
