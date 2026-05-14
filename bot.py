@@ -13,7 +13,24 @@ CANAL_ID = int(os.getenv("CANAL_ID", "1504491774150705152"))
 DATA_FILE = "data.json"
 PANEL_FILE = "panel_id.json"
 
-# Tracks users waiting to send a chest photo: user_id -> sale info
+COMBOS = ["Aurora", "Delfos", "Estradeiro", "Estradeiro Verde", "Sunset", "Midnight"]
+PELUCIAS = ["Aegis", "Raposo"]
+TODOS_ITENS = COMBOS + PELUCIAS
+
+DRACMAS = {**{c: 10 for c in COMBOS}, **{p: 250 for p in PELUCIAS}}
+
+EMOJI = {
+    "Aurora": "🌅",
+    "Delfos": "🌊",
+    "Estradeiro": "🛣️",
+    "Estradeiro Verde": "🌿",
+    "Sunset": "🌇",
+    "Midnight": "🌙",
+    "Aegis": "🛡️",
+    "Raposo": "🦊",
+}
+
+# user_id -> sale info (waiting for chest photo)
 pending_sales: dict[int, dict] = {}
 
 intents = discord.Intents.default()
@@ -24,18 +41,32 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ── Data helpers ──────────────────────────────────────────────────────────────
 
+def default_data() -> dict:
+    return {
+        "estoque": {item: 0 for item in TODOS_ITENS},
+        "total_dracmas_depositados": 0,
+        "historico": [],
+    }
+
+
 def load_data() -> dict:
     if not os.path.exists(DATA_FILE):
-        data = {
-            "estoque_atual": 0,
-            "total_combos_vendidos": 0,
-            "total_dracmas_depositados": 0,
-            "historico": [],
-        }
+        data = default_data()
         save_data(data)
         return data
     with open(DATA_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+        data = json.load(f)
+    # Migrate from old flat structure
+    if "estoque_atual" in data:
+        new = default_data()
+        new["total_dracmas_depositados"] = data.get("total_dracmas_depositados", 0)
+        new["historico"] = data.get("historico", [])
+        save_data(new)
+        return new
+    # Ensure every item key exists
+    for item in TODOS_ITENS:
+        data["estoque"].setdefault(item, 0)
+    return data
 
 
 def save_data(data: dict) -> None:
@@ -55,15 +86,33 @@ def save_panel_id(message_id: int) -> None:
         json.dump({"message_id": message_id}, f)
 
 
+# ── Select options (shared) ───────────────────────────────────────────────────
+
+SELECT_OPTIONS = [
+    discord.SelectOption(label="Aurora",          emoji="🌅", description="Combo • 10 Ð"),
+    discord.SelectOption(label="Delfos",          emoji="🌊", description="Combo • 10 Ð"),
+    discord.SelectOption(label="Estradeiro",      emoji="🛣️", description="Combo • 10 Ð"),
+    discord.SelectOption(label="Estradeiro Verde",emoji="🌿", description="Combo • 10 Ð"),
+    discord.SelectOption(label="Sunset",          emoji="🌇", description="Combo • 10 Ð"),
+    discord.SelectOption(label="Midnight",        emoji="🌙", description="Combo • 10 Ð"),
+    discord.SelectOption(label="Aegis",           emoji="🛡️", description="Pelúcia • 250 Ð"),
+    discord.SelectOption(label="Raposo",          emoji="🦊", description="Pelúcia • 250 Ð"),
+]
+
+
 # ── Modals ────────────────────────────────────────────────────────────────────
 
-class AdicionarEstoqueModal(discord.ui.Modal, title="📦 Adicionar Estoque"):
-    quantidade = discord.ui.TextInput(
-        label="Quantos combos foram adicionados?",
-        placeholder="Ex: 10",
-        min_length=1,
-        max_length=6,
-    )
+class AdicionarEstoqueModal(discord.ui.Modal):
+    def __init__(self, item: str):
+        super().__init__(title=f"📦 Adicionar {item}")
+        self.item = item
+        self.quantidade = discord.ui.TextInput(
+            label=f"Quantos(as) {item} adicionar?",
+            placeholder="Ex: 5",
+            min_length=1,
+            max_length=6,
+        )
+        self.add_item(self.quantidade)
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
@@ -77,25 +126,31 @@ class AdicionarEstoqueModal(discord.ui.Modal, title="📦 Adicionar Estoque"):
             return
 
         data = load_data()
-        data["estoque_atual"] += qtd
+        data["estoque"][self.item] += qtd
         save_data(data)
 
+        tipo = "Pelúcia" if self.item in PELUCIAS else "Combo"
         embed = discord.Embed(title="📦 Estoque Atualizado", color=discord.Color.blue())
-        embed.add_field(name="Combos Adicionados", value=f"+{qtd}", inline=True)
-        embed.add_field(name="Estoque Atual", value=str(data["estoque_atual"]), inline=True)
+        embed.add_field(name="Item", value=f"{EMOJI[self.item]} {self.item} ({tipo})", inline=False)
+        embed.add_field(name="Adicionados", value=f"+{qtd}", inline=True)
+        embed.add_field(name="Estoque Atual", value=str(data["estoque"][self.item]), inline=True)
         embed.set_footer(
             text=f"{interaction.user.display_name} • {datetime.now().strftime('%d/%m/%Y %H:%M')}"
         )
         await interaction.response.send_message(embed=embed)
 
 
-class RegistrarVendaModal(discord.ui.Modal, title="💰 Registrar Venda"):
-    quantidade = discord.ui.TextInput(
-        label="Quantos combos foram vendidos?",
-        placeholder="Ex: 5",
-        min_length=1,
-        max_length=6,
-    )
+class RegistrarVendaModal(discord.ui.Modal):
+    def __init__(self, item: str):
+        super().__init__(title=f"💰 Venda — {item}")
+        self.item = item
+        self.quantidade = discord.ui.TextInput(
+            label=f"Quantos(as) {item} foram vendidos(as)?",
+            placeholder="Ex: 2",
+            min_length=1,
+            max_length=6,
+        )
+        self.add_item(self.quantidade)
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
@@ -109,15 +164,19 @@ class RegistrarVendaModal(discord.ui.Modal, title="💰 Registrar Venda"):
             return
 
         data = load_data()
-        if data["estoque_atual"] < qtd:
+        estoque_item = data["estoque"].get(self.item, 0)
+        if estoque_item < qtd:
             await interaction.response.send_message(
-                f"❌ Estoque insuficiente! Disponível: **{data['estoque_atual']}** combos.",
+                f"❌ Estoque insuficiente de **{self.item}**! Disponível: **{estoque_item}**.",
                 ephemeral=True,
             )
             return
 
+        dracmas = DRACMAS[self.item] * qtd
         pending_sales[interaction.user.id] = {
-            "combos": qtd,
+            "item": self.item,
+            "quantidade": qtd,
+            "dracmas": dracmas,
             "channel_id": interaction.channel_id,
             "display_name": interaction.user.display_name,
             "mention": interaction.user.mention,
@@ -125,9 +184,29 @@ class RegistrarVendaModal(discord.ui.Modal, title="💰 Registrar Venda"):
 
         await interaction.response.send_message(
             f"📸 **Envie a foto do baú agora** (Ctrl+V para colar a imagem).\n"
-            f"> Combos: **{qtd}** • Dracmas a depositar: **{qtd * 10} Ð**",
+            f"> {EMOJI[self.item]} **{self.item}**: {qtd} unid. • **{dracmas} Ð** a depositar",
             ephemeral=True,
         )
+
+
+# ── Select menus ──────────────────────────────────────────────────────────────
+
+class SelecionarItemEstoqueView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+
+    @discord.ui.select(placeholder="Selecione o item...", options=SELECT_OPTIONS)
+    async def select_item(self, interaction: discord.Interaction, select: discord.ui.Select):
+        await interaction.response.send_modal(AdicionarEstoqueModal(select.values[0]))
+
+
+class SelecionarItemVendaView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+
+    @discord.ui.select(placeholder="Selecione o item vendido...", options=SELECT_OPTIONS)
+    async def select_item(self, interaction: discord.Interaction, select: discord.ui.Select):
+        await interaction.response.send_modal(RegistrarVendaModal(select.values[0]))
 
 
 # ── Persistent panel view ─────────────────────────────────────────────────────
@@ -143,7 +222,11 @@ class PainelView(discord.ui.View):
         custom_id="bar:add_stock",
     )
     async def add_stock(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(AdicionarEstoqueModal())
+        await interaction.response.send_message(
+            "📦 **Selecione o item para adicionar ao estoque:**",
+            view=SelecionarItemEstoqueView(),
+            ephemeral=True,
+        )
 
     @discord.ui.button(
         label="Registrar Venda",
@@ -152,7 +235,11 @@ class PainelView(discord.ui.View):
         custom_id="bar:register_sale",
     )
     async def register_sale(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(RegistrarVendaModal())
+        await interaction.response.send_message(
+            "💰 **Selecione o item vendido:**",
+            view=SelecionarItemVendaView(),
+            ephemeral=True,
+        )
 
     @discord.ui.button(
         label="Ver Resumo",
@@ -162,17 +249,25 @@ class PainelView(discord.ui.View):
     )
     async def summary(self, interaction: discord.Interaction, button: discord.ui.Button):
         data = load_data()
+        estoque = data["estoque"]
+        historico = data["historico"]
+
+        total_combos_qtd = sum(r["quantidade"] for r in historico if r.get("item") in COMBOS)
+        total_pelucias_qtd = sum(r["quantidade"] for r in historico if r.get("item") in PELUCIAS)
+
+        combos_lines = "\n".join(
+            f"{EMOJI[c]} **{c}**: {estoque.get(c, 0)}" for c in COMBOS
+        )
+        pelucias_lines = "\n".join(
+            f"{EMOJI[p]} **{p}**: {estoque.get(p, 0)}" for p in PELUCIAS
+        )
+
         embed = discord.Embed(title="📊 Resumo do Bar", color=discord.Color.gold())
-        embed.add_field(
-            name="📦 Estoque Atual",
-            value=f"{data['estoque_atual']} combos",
-            inline=False,
-        )
-        embed.add_field(
-            name="💰 Total Vendido",
-            value=f"{data['total_combos_vendidos']} combos",
-            inline=True,
-        )
+        embed.add_field(name="🍹 Estoque — Combos", value=combos_lines, inline=True)
+        embed.add_field(name="🧸 Estoque — Pelúcias", value=pelucias_lines, inline=True)
+        embed.add_field(name="​", value="​", inline=False)
+        embed.add_field(name="💰 Combos Vendidos", value=str(total_combos_qtd), inline=True)
+        embed.add_field(name="🧸 Pelúcias Vendidas", value=str(total_pelucias_qtd), inline=True)
         embed.add_field(
             name="🪙 Dracmas Depositados",
             value=f"{data['total_dracmas_depositados']} Ð",
@@ -189,9 +284,11 @@ def make_panel_embed() -> discord.Embed:
         title="🍺 Gerenciamento do Bar — GTA RP",
         description=(
             "Use os botões abaixo para gerenciar o bar.\n\n"
-            "**📦 Adicionar Estoque** — Registra combos adicionados ao estoque\n"
+            "**📦 Adicionar Estoque** — Registra itens no estoque\n"
             "**💰 Registrar Venda** — Registra venda com foto obrigatória do baú\n"
-            "**📊 Ver Resumo** — Exibe estoque atual e totais acumulados"
+            "**📊 Ver Resumo** — Exibe estoque e totais acumulados\n\n"
+            "🍹 **Combos** (10 Ð/unid): Aurora, Delfos, Estradeiro, Estradeiro Verde, Sunset, Midnight\n"
+            "🧸 **Pelúcias** (250 Ð/unid): Aegis, Raposo"
         ),
         color=discord.Color.orange(),
     )
@@ -202,10 +299,9 @@ def make_panel_embed() -> discord.Embed:
 @bot.event
 async def on_ready():
     print(f"✅ Bot online: {bot.user} (ID: {bot.user.id})")
-    print(f"🔍 Servidores conectados: {[g.name for g in bot.guilds]}")
+    print(f"🔍 Servidores: {[g.name for g in bot.guilds]}")
     print(f"🔍 Buscando canal ID: {CANAL_ID}")
 
-    # Register persistent view so buttons survive bot restarts
     bot.add_view(PainelView())
 
     try:
@@ -253,18 +349,12 @@ async def on_message(message: discord.Message):
 
     sale = pending_sales.get(message.author.id)
 
-    # Not waiting for a photo from this user, or wrong channel
     if sale is None or message.channel.id != sale["channel_id"]:
         await bot.process_commands(message)
         return
 
-    # Find first image attachment
     image = next(
-        (
-            a
-            for a in message.attachments
-            if a.content_type and a.content_type.startswith("image/")
-        ),
+        (a for a in message.attachments if a.content_type and a.content_type.startswith("image/")),
         None,
     )
 
@@ -275,36 +365,33 @@ async def on_message(message: discord.Message):
         )
         return
 
-    combos = sale["combos"]
-    dracmas = combos * 10
+    item = sale["item"]
+    quantidade = sale["quantidade"]
+    dracmas = sale["dracmas"]
     now = datetime.now()
 
     data = load_data()
-    data["estoque_atual"] = max(0, data["estoque_atual"] - combos)
-    data["total_combos_vendidos"] += combos
+    data["estoque"][item] = max(0, data["estoque"].get(item, 0) - quantidade)
     data["total_dracmas_depositados"] += dracmas
-    data["historico"].append(
-        {
-            "usuario": sale["display_name"],
-            "usuario_id": message.author.id,
-            "combos": combos,
-            "dracmas": dracmas,
-            "data": now.isoformat(),
-            "foto_url": image.url,
-        }
-    )
+    data["historico"].append({
+        "usuario": sale["display_name"],
+        "usuario_id": message.author.id,
+        "item": item,
+        "quantidade": quantidade,
+        "dracmas": dracmas,
+        "data": now.isoformat(),
+        "foto_url": image.url,
+    })
     save_data(data)
     del pending_sales[message.author.id]
 
+    tipo = "Pelúcia" if item in PELUCIAS else "Combo"
     embed = discord.Embed(title="✅ Venda Registrada!", color=discord.Color.green())
     embed.add_field(name="👤 Vendedor", value=sale["mention"], inline=True)
-    embed.add_field(name="📦 Combos Vendidos", value=str(combos), inline=True)
+    embed.add_field(name="🛍️ Item", value=f"{EMOJI[item]} {item} ({tipo})", inline=True)
+    embed.add_field(name="📦 Quantidade", value=str(quantidade), inline=True)
     embed.add_field(name="🪙 Dracmas Depositados", value=f"{dracmas} Ð", inline=True)
-    embed.add_field(
-        name="📦 Estoque Restante",
-        value=f"{data['estoque_atual']} combos",
-        inline=True,
-    )
+    embed.add_field(name="📦 Estoque Restante", value=str(data["estoque"][item]), inline=True)
     embed.set_image(url=image.url)
     embed.set_footer(text=now.strftime("%d/%m/%Y %H:%M"))
 

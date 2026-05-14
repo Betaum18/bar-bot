@@ -1,6 +1,14 @@
 {
-  "estoque_atual": 0,
-  "total_combos_vendidos": 0,
+  "estoque": {
+    "Aurora": 0,
+    "Delfos": 0,
+    "Estradeiro": 0,
+    "Estradeiro Verde": 0,
+    "Sunset": 0,
+    "Midnight": 0,
+    "Aegis": 0,
+    "Raposo": 0
+  },
   "total_dracmas_depositados": 0,
   "historico": []
 }
