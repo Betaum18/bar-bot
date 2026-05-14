@@ -202,14 +202,25 @@ def make_panel_embed() -> discord.Embed:
 @bot.event
 async def on_ready():
     print(f"✅ Bot online: {bot.user} (ID: {bot.user.id})")
+    print(f"🔍 Servidores conectados: {[g.name for g in bot.guilds]}")
+    print(f"🔍 Buscando canal ID: {CANAL_ID}")
 
     # Register persistent view so buttons survive bot restarts
     bot.add_view(PainelView())
 
-    canal = bot.get_channel(CANAL_ID)
-    if canal is None:
-        print(f"❌ Canal {CANAL_ID} não encontrado. Verifique CANAL_ID no .env")
+    try:
+        canal = await bot.fetch_channel(CANAL_ID)
+    except discord.NotFound:
+        print(f"❌ Canal {CANAL_ID} não encontrado.")
         return
+    except discord.Forbidden:
+        print(f"❌ Sem permissão para acessar o canal {CANAL_ID}.")
+        return
+    except Exception as e:
+        print(f"❌ Erro ao buscar canal: {e}")
+        return
+
+    print(f"✅ Canal encontrado: #{canal.name}")
 
     embed = make_panel_embed()
     view = PainelView()
@@ -224,9 +235,14 @@ async def on_ready():
         except discord.NotFound:
             print("⚠️  Mensagem do painel não encontrada, criando nova...")
 
-    msg = await canal.send(embed=embed, view=view)
-    save_panel_id(msg.id)
-    print(f"📌 Painel criado (msg ID: {msg.id})")
+    try:
+        msg = await canal.send(embed=embed, view=view)
+        save_panel_id(msg.id)
+        print(f"📌 Painel criado (msg ID: {msg.id})")
+    except discord.Forbidden:
+        print(f"❌ Sem permissão para enviar mensagens no canal #{canal.name}.")
+    except Exception as e:
+        print(f"❌ Erro ao criar painel: {e}")
 
 
 @bot.event
