@@ -8,7 +8,8 @@ from datetime import datetime
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-CANAL_ID = int(os.getenv("CANAL_ID", "1504491774150705152"))
+CANAL_PAINEL_ID = int(os.getenv("CANAL_PAINEL_ID", "1504517445954703554"))
+CANAL_POSTS_ID  = int(os.getenv("CANAL_POSTS_ID",  "1504491774150705152"))
 
 DATA_FILE = "data.json"
 PANEL_FILE = "panel_id.json"
@@ -137,7 +138,10 @@ class AdicionarEstoqueModal(discord.ui.Modal):
         embed.set_footer(
             text=f"{interaction.user.display_name} • {datetime.now().strftime('%d/%m/%Y %H:%M')}"
         )
-        await interaction.response.send_message(embed=embed)
+        # Acknowledge the modal ephemerally, then post the record in the posts channel
+        await interaction.response.send_message("✅ Estoque atualizado!", ephemeral=True)
+        canal_posts = bot.get_channel(CANAL_POSTS_ID) or await bot.fetch_channel(CANAL_POSTS_ID)
+        await canal_posts.send(embed=embed)
 
 
 class RegistrarVendaModal(discord.ui.Modal):
@@ -177,13 +181,13 @@ class RegistrarVendaModal(discord.ui.Modal):
             "item": self.item,
             "quantidade": qtd,
             "dracmas": dracmas,
-            "channel_id": interaction.channel_id,
+            "channel_id": CANAL_PAINEL_ID,  # user must send the photo in the panel channel
             "display_name": interaction.user.display_name,
             "mention": interaction.user.mention,
         }
 
         await interaction.response.send_message(
-            f"📸 **Envie a foto do baú agora** (Ctrl+V para colar a imagem).\n"
+            f"📸 **Envie a foto do baú agora** neste canal (Ctrl+V para colar a imagem).\n"
             f"> {EMOJI[self.item]} **{self.item}**: {qtd} unid. • **{dracmas} Ð** a depositar",
             ephemeral=True,
         )
@@ -274,7 +278,9 @@ class PainelView(discord.ui.View):
             inline=True,
         )
         embed.set_footer(text=f"Atualizado em {datetime.now().strftime('%d/%m/%Y %H:%M')}")
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message("📊 Resumo gerado!", ephemeral=True)
+        canal_posts = bot.get_channel(CANAL_POSTS_ID) or await bot.fetch_channel(CANAL_POSTS_ID)
+        await canal_posts.send(embed=embed)
 
 
 # ── Events ────────────────────────────────────────────────────────────────────
@@ -300,20 +306,20 @@ def make_panel_embed() -> discord.Embed:
 async def on_ready():
     print(f"✅ Bot online: {bot.user} (ID: {bot.user.id})")
     print(f"🔍 Servidores: {[g.name for g in bot.guilds]}")
-    print(f"🔍 Buscando canal ID: {CANAL_ID}")
+    print(f"🔍 Buscando canal do painel: {CANAL_PAINEL_ID}")
 
     bot.add_view(PainelView())
 
     try:
-        canal = await bot.fetch_channel(CANAL_ID)
+        canal = await bot.fetch_channel(CANAL_PAINEL_ID)
     except discord.NotFound:
-        print(f"❌ Canal {CANAL_ID} não encontrado.")
+        print(f"❌ Canal do painel {CANAL_PAINEL_ID} não encontrado.")
         return
     except discord.Forbidden:
-        print(f"❌ Sem permissão para acessar o canal {CANAL_ID}.")
+        print(f"❌ Sem permissão para acessar o canal {CANAL_PAINEL_ID}.")
         return
     except Exception as e:
-        print(f"❌ Erro ao buscar canal: {e}")
+        print(f"❌ Erro ao buscar canal do painel: {e}")
         return
 
     print(f"✅ Canal encontrado: #{canal.name}")
@@ -395,7 +401,10 @@ async def on_message(message: discord.Message):
     embed.set_image(url=image.url)
     embed.set_footer(text=now.strftime("%d/%m/%Y %H:%M"))
 
-    await message.reply(embed=embed)
+    # Acknowledge in the panel channel and post the record in the posts channel
+    await message.reply("✅ Venda registrada!", delete_after=5)
+    canal_posts = bot.get_channel(CANAL_POSTS_ID) or await bot.fetch_channel(CANAL_POSTS_ID)
+    await canal_posts.send(embed=embed)
 
 
 bot.run(TOKEN)
