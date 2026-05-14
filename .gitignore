@@ -1,0 +1,4 @@
+.env
+panel_id.json
+__pycache__/
+*.pyc

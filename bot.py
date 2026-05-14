@@ -1,11 +1,14 @@
 import discord
 from discord.ext import commands
+from dotenv import load_dotenv
 import json
 import os
 from datetime import datetime
 
-TOKEN = os.environ["DISCORD_TOKEN"]
-CANAL_ID = int(os.environ.get("CANAL_ID", "1504491774150705152"))
+load_dotenv()
+
+TOKEN = os.getenv("DISCORD_TOKEN")
+CANAL_ID = int(os.getenv("CANAL_ID", "1504491774150705152"))
 
 DATA_FILE = "data.json"
 PANEL_FILE = "panel_id.json"
