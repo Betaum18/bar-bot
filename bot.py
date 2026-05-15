@@ -52,6 +52,7 @@ def default_data() -> dict:
     return {
         "estoque": {item: 0 for item in TODOS_ITENS},
         "total_dracmas_depositados": 0,
+        "total_dracmas_sacados": 0,
         "historico": [],
     }
 
@@ -71,6 +72,7 @@ def load_data() -> dict:
         return new
     for item in TODOS_ITENS:
         data["estoque"].setdefault(item, 0)
+    data.setdefault("total_dracmas_sacados", 0)
     return data
 
 
@@ -124,6 +126,7 @@ async def sync_stock_from_sheets() -> None:
 
         data = load_data()
         total_dracmas = 0
+        total_sacados = 0
         # The last row mentioning each item carries the most recent estoque_restante
         for row in rows:
             item = row.get("item")
@@ -137,8 +140,14 @@ async def sync_stock_from_sheets() -> None:
                     total_dracmas += int(row.get("dracmas") or 0)
                 except (ValueError, TypeError):
                     pass
+            if row.get("tipo") == "Saque":
+                try:
+                    total_sacados += int(row.get("dracmas") or 0)
+                except (ValueError, TypeError):
+                    pass
 
         data["total_dracmas_depositados"] = total_dracmas
+        data["total_dracmas_sacados"] = total_sacados
         save_data(data)
         print(f"✅ Estoque sincronizado da planilha: { {k: v for k, v in data['estoque'].items()} }")
 
@@ -316,6 +325,71 @@ class RegistrarVendaModal(discord.ui.Modal):
         )
 
 
+class RegistrarSaqueModal(discord.ui.Modal, title="💸 Registrar Saque"):
+    valor = discord.ui.TextInput(
+        label="Valor em Dracmas (Ð)",
+        placeholder="Ex: 500",
+        min_length=1,
+        max_length=10,
+    )
+    motivo = discord.ui.TextInput(
+        label="Motivo (opcional)",
+        placeholder="Ex: Compra de combos",
+        required=False,
+        max_length=100,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            qtd = int(self.valor.value.strip())
+            if qtd <= 0:
+                raise ValueError
+        except ValueError:
+            await interaction.response.send_message("❌ Digite um valor inteiro positivo.", ephemeral=True)
+            return
+
+        data = load_data()
+        saldo = data["total_dracmas_depositados"] - data["total_dracmas_sacados"]
+        if qtd > saldo:
+            await interaction.response.send_message(
+                f"❌ Saldo insuficiente! Saldo atual: **{saldo} Ð**.",
+                ephemeral=True,
+            )
+            return
+
+        data["total_dracmas_sacados"] += qtd
+        save_data(data)
+
+        now = datetime.now()
+        novo_saldo = data["total_dracmas_depositados"] - data["total_dracmas_sacados"]
+        motivo_str = self.motivo.value.strip() or "—"
+
+        embed = discord.Embed(title="💸 Saque Registrado", color=discord.Color.red())
+        embed.add_field(name="👤 Responsável", value=interaction.user.mention, inline=True)
+        embed.add_field(name="💸 Valor Sacado", value=f"{qtd} Ð", inline=True)
+        embed.add_field(name="📋 Motivo", value=motivo_str, inline=False)
+        embed.add_field(name="🪙 Saldo Restante", value=f"{novo_saldo} Ð", inline=True)
+        embed.set_footer(text=now.strftime("%d/%m/%Y %H:%M"))
+
+        await interaction.response.send_message("✅ Saque registrado!", ephemeral=True)
+
+        canal_posts = bot.get_channel(CANAL_POSTS_ID) or await bot.fetch_channel(CANAL_POSTS_ID)
+        payload = {
+            "timestamp":        now.strftime("%d/%m/%Y %H:%M"),
+            "tipo":             "Saque",
+            "usuario":          interaction.user.display_name,
+            "item":             motivo_str,
+            "quantidade":       "",
+            "dracmas":          qtd,
+            "foto":             "",
+            "estoque_restante": "",
+        }
+        await asyncio.gather(
+            canal_posts.send(embed=embed),
+            sheets_append(payload),
+        )
+
+
 # ── Select menus ──────────────────────────────────────────────────────────────
 
 class SelecionarItemEstoqueView(discord.ui.View):
@@ -358,6 +432,10 @@ class PainelView(discord.ui.View):
             ephemeral=True,
         )
 
+    @discord.ui.button(label="Registrar Saque",   emoji="💸", style=discord.ButtonStyle.danger,    custom_id="bar:register_withdrawal")
+    async def register_withdrawal(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(RegistrarSaqueModal())
+
     @discord.ui.button(label="Ver Resumo",        emoji="📊", style=discord.ButtonStyle.secondary, custom_id="bar:summary")
     async def summary(self, interaction: discord.Interaction, button: discord.ui.Button):
         data     = load_data()
@@ -374,9 +452,13 @@ class PainelView(discord.ui.View):
         embed.add_field(name="🍹 Estoque — Combos",    value=combos_lines,   inline=True)
         embed.add_field(name="🧸 Estoque — Pelúcias",  value=pelucias_lines, inline=True)
         embed.add_field(name="​", value="​", inline=False)
+        saldo = data["total_dracmas_depositados"] - data["total_dracmas_sacados"]
         embed.add_field(name="💰 Combos Vendidos",     value=str(total_combos),                        inline=True)
         embed.add_field(name="🧸 Pelúcias Vendidas",   value=str(total_pelucias),                      inline=True)
-        embed.add_field(name="🪙 Dracmas Depositados", value=f"{data['total_dracmas_depositados']} Ð", inline=True)
+        embed.add_field(name="​", value="​", inline=False)
+        embed.add_field(name="🪙 Total Depositado",    value=f"{data['total_dracmas_depositados']} Ð", inline=True)
+        embed.add_field(name="💸 Total Sacado",        value=f"{data['total_dracmas_sacados']} Ð",    inline=True)
+        embed.add_field(name="💰 Saldo Atual",         value=f"{saldo} Ð",                            inline=True)
         embed.set_footer(text=f"Atualizado em {datetime.now().strftime('%d/%m/%Y %H:%M')}")
 
         await interaction.response.send_message("📊 Resumo gerado!", ephemeral=True)
@@ -388,18 +470,19 @@ class PainelView(discord.ui.View):
 
 def make_panel_embed() -> discord.Embed:
     embed = discord.Embed(
-        title="🍺 Gerenciamento do Bar — GTA RP",
+        title="🍺 Gerenciamento do Bar",
         description=(
             "Use os botões abaixo para gerenciar o bar.\n\n"
             "**📦 Adicionar Estoque** — Registra itens no estoque\n"
             "**💰 Registrar Venda** — Registra venda com foto obrigatória do baú\n"
+            "**💸 Registrar Saque** — Registra retirada de dracmas do caixa\n"
             "**📊 Ver Resumo** — Exibe estoque e totais acumulados\n\n"
             "🍹 **Combos** (10 Ð/unid): Aurora, Delfos, Estradeiro, Estradeiro Verde, Sunset, Midnight\n"
             "🧸 **Pelúcias** (250 Ð/unid): Aegis, Raposo"
         ),
         color=discord.Color.orange(),
     )
-    embed.set_footer(text="Bar Bot • GTA RP")
+    embed.set_footer(text="Bar Bot")
     return embed
 
 
