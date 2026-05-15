@@ -135,7 +135,7 @@ async def sync_stock_from_sheets() -> None:
                     data["estoque"][item] = int(row.get("estoque_restante") or 0)
                 except (ValueError, TypeError):
                     pass
-            if row.get("tipo") == "Venda":
+            if row.get("tipo") in ("Venda", "Dracmas"):
                 try:
                     total_dracmas += int(row.get("dracmas") or 0)
                 except (ValueError, TypeError):
@@ -190,6 +190,10 @@ SELECT_OPTIONS = [
     discord.SelectOption(label="Raposo",           emoji="🦊", description="Pelúcia • 250 Ð"),
 ]
 
+SELECT_OPTIONS_ESTOQUE = SELECT_OPTIONS + [
+    discord.SelectOption(label="Dracmas", emoji="🪙", description="Adicionar saldo ao baú"),
+]
+
 
 # ── Modals ────────────────────────────────────────────────────────────────────
 
@@ -239,6 +243,55 @@ class AdicionarEstoqueModal(discord.ui.Modal):
             "dracmas":         "",
             "foto":            "",
             "estoque_restante": data["estoque"][self.item],
+        }
+        await asyncio.gather(
+            canal_posts.send(embed=embed),
+            sheets_append(payload),
+        )
+
+
+class AdicionarDracmasModal(discord.ui.Modal, title="🪙 Adicionar Dracmas"):
+    valor = discord.ui.TextInput(
+        label="Quantos Dracmas adicionar ao saldo?",
+        placeholder="Ex: 1000",
+        min_length=1,
+        max_length=10,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            qtd = int(self.valor.value.strip())
+            if qtd <= 0:
+                raise ValueError
+        except ValueError:
+            await interaction.response.send_message("❌ Digite um valor inteiro positivo.", ephemeral=True)
+            return
+
+        data = load_data()
+        data["total_dracmas_depositados"] += qtd
+        save_data(data)
+
+        now = datetime.now()
+        saldo = data["total_dracmas_depositados"] - data["total_dracmas_sacados"]
+
+        embed = discord.Embed(title="🪙 Dracmas Adicionados", color=discord.Color.blue())
+        embed.add_field(name="👤 Responsável", value=interaction.user.mention, inline=True)
+        embed.add_field(name="🪙 Valor Adicionado", value=f"{qtd} Ð", inline=True)
+        embed.add_field(name="💰 Saldo Atual", value=f"{saldo} Ð", inline=True)
+        embed.set_footer(text=now.strftime("%d/%m/%Y %H:%M"))
+
+        await interaction.response.send_message("✅ Dracmas adicionados!", ephemeral=True)
+
+        canal_posts = bot.get_channel(CANAL_POSTS_ID) or await bot.fetch_channel(CANAL_POSTS_ID)
+        payload = {
+            "timestamp":        now.strftime("%d/%m/%Y %H:%M"),
+            "tipo":             "Dracmas",
+            "usuario":          interaction.user.display_name,
+            "item":             "Dracmas",
+            "quantidade":       "",
+            "dracmas":          qtd,
+            "foto":             "",
+            "estoque_restante": "",
         }
         await asyncio.gather(
             canal_posts.send(embed=embed),
@@ -396,9 +449,12 @@ class SelecionarItemEstoqueView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=60)
 
-    @discord.ui.select(placeholder="Selecione o item...", options=SELECT_OPTIONS)
+    @discord.ui.select(placeholder="Selecione o item...", options=SELECT_OPTIONS_ESTOQUE)
     async def select_item(self, interaction: discord.Interaction, select: discord.ui.Select):
-        await interaction.response.send_modal(AdicionarEstoqueModal(select.values[0]))
+        if select.values[0] == "Dracmas":
+            await interaction.response.send_modal(AdicionarDracmasModal())
+        else:
+            await interaction.response.send_modal(AdicionarEstoqueModal(select.values[0]))
 
 
 class SelecionarItemVendaView(discord.ui.View):
